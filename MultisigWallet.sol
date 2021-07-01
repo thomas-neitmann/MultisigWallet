@@ -12,10 +12,9 @@ contract MultisigWallet {
     
     address[] owners;
     mapping(address => bool) public isOwner;
-    mapping(address => bool) public hasApproved;
+    mapping(address => mapping(uint => bool)) approvals;
     uint numApprovalsNeeded;
-    TransferRequest pendingTransfer;
-    TransferRequest[] transferLog;
+    TransferRequest[] transfers;
     
     constructor(address[] memory _owners, uint _numApprovalsNeeded) {
         require(_owners.length >= 2, "The wallet needs at least two owners");
@@ -36,37 +35,37 @@ contract MultisigWallet {
         require(isOwner[msg.sender], "Only contract owners can request a transfer");
         require(address(this).balance >= amount, "Wallet balance not sufficient for requested amount");
 
-        hasApproved[msg.sender] = true;
-        pendingTransfer = TransferRequest(recipient, amount, 1, false);
+        transfers.push(TransferRequest(recipient, amount, 1, false));
+        approvals[msg.sender][transfers.length] = true;
     }
     
-    function approveTransfer() public {
+    function approveTransfer(uint txId) public {
         require(isOwner[msg.sender], "Only contract owners can approve a transfer");
-        require(!hasApproved[msg.sender], "Transfer has already been approved by this address");
-        require(!pendingTransfer.completed, "No pending transfer to approve");
+        require(!approvals[msg.sender][txId], "Transfer has already been approved by this address");
+        require(!transfers[txId].completed, "Transfer has already been completed");
         
-        pendingTransfer.numApprovals += 1;
-        if (pendingTransfer.numApprovals >= numApprovalsNeeded) {
-            pendingTransfer.recipient.transfer(pendingTransfer.amount);
-            emit transactionCompleted(pendingTransfer.recipient, pendingTransfer.amount);
-            transferLog.push(pendingTransfer);
-            pendingTransfer.completed = true;
+        approvals[msg.sender][txId] = true;
+        transfers[txId].numApprovals += 1;
+        
+        if (transfers[txId].numApprovals >= numApprovalsNeeded) {
+            require(address(this).balance >= transfers[txId].amount, "Transfer cannot be completed due to insufficient funds");
             
-            for (uint i = 0; i < owners.length; i++) {
-                hasApproved[owners[i]] = false;
-            }
-            
+            transfers[txId].recipient.transfer(transfers[txId].amount);
+            emit transactionCompleted(transfers[txId].recipient, transfers[txId].amount);
+            transfers[txId].completed = true;
         }
     }
     
-    function reverseApproval() public {
-        require(isOwner[msg.sender] && hasApproved[msg.sender], "Only contract owners who have already approved a transaction can reverse their approval");
-        pendingTransfer.numApprovals -= 1;
-        hasApproved[msg.sender] = false;
+    function revokeApproval(uint txId) public {
+        require(isOwner[msg.sender] && approvals[msg.sender][txId], "Only contract owners who have already approved a transaction can reverse their approval");
+        require(!transfers[txId].completed, "Transfer has already been completed");
+        
+        transfers[txId].numApprovals -= 1;
+        approvals[msg.sender][txId] = false;
     }
     
-    function getPendingTransfer() public view returns(address, uint) {
-        return (pendingTransfer.recipient, pendingTransfer.amount);
+    function getTransfer(uint txId) public view returns(address, uint, uint, bool) {
+        return (transfers[txId].recipient, transfers[txId].amount, transfers[txId].numApprovals, transfers[txId].completed);
     }
     
 }
